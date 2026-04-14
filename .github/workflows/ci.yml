@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  apple-build-and-test:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          if ! command -v swiftlint >/dev/null 2>&1; then
+            brew install swiftlint
+          fi
+
+      - name: Generate Xcode project
+        run: scripts/bootstrap_xcodeproj.sh
+
+      - name: List schemes
+        run: xcodebuild -list -project Vox.xcodeproj
+
+      - name: Build iOS
+        run: |
+          xcodebuild -project Vox.xcodeproj \
+            -scheme "Vox-iOS" \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Build macOS
+        run: |
+          xcodebuild -project Vox.xcodeproj \
+            -scheme "Vox-macOS" \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Test macOS
+        run: |
+          xcodebuild -project Vox.xcodeproj \
+            -scheme "Vox-macOS" \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            test
+
+      - name: SwiftLint
+        run: swiftlint
+
+      - name: Privacy audit
+        run: scripts/privacy_audit.sh

@@ -1,0 +1,60 @@
+name: Vox
+options:
+  minimumXcodeGenVersion: 2.39.0
+  deploymentTarget:
+    iOS: "18.0"
+    macOS: "15.0"
+settings:
+  base:
+    SWIFT_VERSION: 6.0
+    SWIFT_STRICT_CONCURRENCY: complete
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    PRODUCT_NAME: Vox
+targets:
+  Vox-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Vox
+        includes:
+          - App/**
+          - UI/**
+          - Logging/**
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: llc.meridian.vox.ios
+        INFOPLIST_FILE: Vox/Config/iOS-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Vox/Config/Vox-iOS.entitlements
+    scheme:
+      gatherCoverageData: true
+  Vox-macOS:
+    type: application
+    platform: macOS
+    sources:
+      - path: Vox
+        includes:
+          - App/**
+          - UI/**
+          - Logging/**
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: llc.meridian.vox.macos
+        INFOPLIST_FILE: Vox/Config/macOS-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Vox/Config/Vox-macOS.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+    scheme:
+      gatherCoverageData: true
+      testTargets:
+        - Vox-macOSTests
+  Vox-macOSTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - VoxTests
+    dependencies:
+      - target: Vox-macOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: llc.meridian.vox.macos.tests
+        GENERATE_INFOPLIST_FILE: YES
