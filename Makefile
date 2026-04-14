@@ -25,12 +25,12 @@ lint:
 xcodeproj:
 	./scripts/bootstrap_xcodeproj.sh
 
-build-apple:
-	xcodebuild -project Vox.xcodeproj -scheme "Vox iOS" -destination '''platform=iOS Simulator,name=iPhone 16''' build
-	xcodebuild -project Vox.xcodeproj -scheme "Vox macOS" -destination '''platform=macOS''' build
+build-apple: xcodeproj
+	xcodebuild -project Vox.xcodeproj -scheme "Vox-iOS" -destination 'generic/platform=iOS Simulator' build
+	xcodebuild -project Vox.xcodeproj -scheme "Vox-macOS" -destination 'platform=macOS' build
 
-test-apple:
-	xcodebuild -project Vox.xcodeproj -scheme "Vox macOS" -destination '''platform=macOS''' test
+test-apple: xcodeproj
+	xcodebuild -project Vox.xcodeproj -scheme "Vox-macOS" -destination 'platform=macOS' test
 
 privacy-audit:
 	./scripts/privacy_audit.sh

@@ -87,7 +87,8 @@ cd speechtotext
 open Vox.xcodeproj
 
 # Or build from CLI
-xcodebuild -scheme Vox -configuration Debug build
+scripts/bootstrap_xcodeproj.sh
+xcodebuild -project Vox.xcodeproj -scheme "Vox-macOS" -destination "platform=macOS" build
 ```
 
 ## Documentation Map

@@ -10,23 +10,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install tooling
+        run: |
+          brew install xcodegen swiftlint
+
+      - name: Generate Xcode project
+        run: scripts/bootstrap_xcodeproj.sh
+
       - name: Build iOS
-        run: xcodebuild -project Vox.xcodeproj -scheme "Vox iOS" -destination 'platform=iOS Simulator,name=iPhone 16' build
+        run: xcodebuild -project Vox.xcodeproj -scheme "Vox-iOS" -destination 'generic/platform=iOS Simulator' build
 
       - name: Build macOS
-        run: xcodebuild -project Vox.xcodeproj -scheme "Vox macOS" -destination 'platform=macOS' build
+        run: xcodebuild -project Vox.xcodeproj -scheme "Vox-macOS" -destination 'platform=macOS' build
 
       - name: Test macOS
-        run: xcodebuild -project Vox.xcodeproj -scheme "Vox macOS" -destination 'platform=macOS' test
+        run: xcodebuild -project Vox.xcodeproj -scheme "Vox-macOS" -destination 'platform=macOS' test
 
       - name: SwiftLint
-        run: |
-          if command -v swiftlint >/dev/null 2>&1; then
-            swiftlint
-          else
-            echo "swiftlint not found"
-            exit 1
-          fi
+        run: swiftlint
 
       - name: Privacy audit
         run: scripts/privacy_audit.sh
