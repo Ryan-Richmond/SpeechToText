@@ -2,7 +2,7 @@
 
 > Privacy-first, offline-capable voice dictation for iOS and macOS.
 
-**Status:** Pre-MVP (documentation & planning)
+**Status:** Sprint 0 in progress (initial code scaffold added)
 **Platform:** iOS 18+ / macOS 15+ (Sequoia) — SwiftUI multiplatform
 **License:** Proprietary (Meridian LLC) — built on Apache 2.0 / MIT open-source models
 
@@ -70,11 +70,11 @@ An adaptive selector picks the right tier at first launch based on `ProcessInfo.
         └── pipeline.md              ASCII / Mermaid diagrams
 ```
 
-Source code is not yet in the repository — the Xcode project is created in **Phase 1, Sprint 0** of the implementation plan.
+A Sprint 0 Xcode bootstrap spec is now in-repo (`project.yml`) with generation via `xcodegen` (`scripts/bootstrap_xcodeproj.sh`).
 
 ## Getting Started (Developers)
 
-> The Xcode project does not exist yet. See [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for Sprint 0.
+> Generate `Vox.xcodeproj` with `scripts/bootstrap_xcodeproj.sh` (requires `xcodegen`).
 
 Once the project is bootstrapped:
 
