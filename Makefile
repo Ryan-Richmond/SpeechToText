@@ -26,11 +26,11 @@ xcodeproj:
 	./scripts/bootstrap_xcodeproj.sh
 
 build-apple: xcodeproj
-	xcodebuild -project Vox.xcodeproj -scheme "Vox-iOS" -destination 'generic/platform=iOS Simulator' build
-	xcodebuild -project Vox.xcodeproj -scheme "Vox-macOS" -destination 'platform=macOS' build
+	xcodebuild -project Vox.xcodeproj -scheme "Vox-iOS" -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+	xcodebuild -project Vox.xcodeproj -scheme "Vox-macOS" -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
 
 test-apple: xcodeproj
-	xcodebuild -project Vox.xcodeproj -scheme "Vox-macOS" -destination 'platform=macOS' test
+	xcodebuild -project Vox.xcodeproj -scheme "Vox-macOS" -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO test
 
 privacy-audit:
 	./scripts/privacy_audit.sh
