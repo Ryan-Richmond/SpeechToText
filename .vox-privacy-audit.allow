@@ -1,0 +1,13 @@
+# vox-privacy-audit allow-list
+#
+# Each non-empty, non-comment line is a substring. If a finding line from
+# scripts/audit.sh contains that substring, the finding is suppressed.
+#
+# Be specific. Allow file:line or a qualified class name, not a bare keyword.
+# Every entry should have a comment above it explaining why it's allowed.
+
+# --- Model download (Phase 1): URLSession is required to pull GGUF weights. ---
+Vox/Services/ModelDownloadService.swift
+
+# --- BYOK cloud fallback (Phase 2): URLSession is the transport by design. ---
+Vox/Pipeline/CloudLLMEngine.swift
