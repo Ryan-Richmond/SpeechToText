@@ -53,7 +53,7 @@ No Swift source yet. The Xcode project is scheduled for **Phase 1, Sprint 0** in
 
 - **Never** add a network call to the dictation path without explicit approval. The product is "no audio leaves the device." Cloud BYOK is **opt-in only** and disabled by default (Phase 2).
 - Keep audio buffers ephemeral — clear after each dictation.
-- Model files are **not** bundled in the app binary. They are downloaded on first launch into the App Group shared container.
+- Model files are **not** bundled in the app binary, and **not** committed to the repo. They are downloaded on first launch into the App Group shared container by `ModelDownloadService`, which reads `Vox/Resources/Models/registry.json` for canonical URLs and SHA-256 checksums. Developers who want weights locally for testing should run `bash scripts/fetch-dev-models.sh` — this writes to `.dev-models/`, which is gitignored.
 - Prefer `whisper.cpp` + `llama.cpp` with Metal for Phase 1. Core ML conversion is a Phase 2 optimization.
 
 ### When touching UI

@@ -268,7 +268,7 @@ Ongoing work that doesn't belong to a single sprint:
 | llama.cpp Metal regression | Medium | High | Pin commits. Vendor if necessary. |
 | Whisper.cpp Metal regression | Low | High | Same. |
 | iOS keyboard extension rejection | Low | Medium | Ship MVP without it; keyboard ext deferred to v1.1 where precedent (Wispr Flow) exists. |
-| Gemma 4 release slips | Medium | Medium | Target Gemma 4 but keep Gemma 3n as the fallback default. |
+| Gemma 4 model artifact churn | Low | Low | Gemma 4 shipped April 2026. Pin specific GGUF revisions + SHA-256 in `Vox/Resources/Models/registry.json`. |
 | iOS Jetsam kills mid-dictation | Medium | High | Strict RAM budget; `increased-memory-limit` entitlement; user-surfaced "under memory pressure" path. |
 | Hotkey conflicts with other apps | Medium | Low | Configurable; detect common conflicts. |
 | Full Access entitlement misunderstanding in App Review | Medium | Medium | Mirror Wispr Flow's justification language; reference precedent in the submission notes. |

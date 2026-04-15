@@ -1,0 +1,54 @@
+# Vox — .gitignore
+
+# ── Xcode / Swift ─────────────────────────────────────────────────────────────
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcscheme
+!default.xcscheme
+.swiftpm/
+Package.resolved
+.build/
+
+# ── Local model cache ─────────────────────────────────────────────────────────
+# Developer-only model weights downloaded by scripts/fetch-dev-models.sh.
+# NEVER commit model weights — they ship via first-launch download in production.
+.dev-models/
+*.gguf
+*.bin
+!Vox/Resources/Models/registry.json
+
+# ── Python (used by skill scripts) ────────────────────────────────────────────
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# ── Editors ───────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
+
+# ── Logs / temp ───────────────────────────────────────────────────────────────
+*.log
+tmp/
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+# BYOK keys live in Keychain, never on disk. Anything matching these patterns
+# in the repo is almost certainly a mistake.
+*.env
+.env.*
+!.env.example
+secrets.json
+*.p12
+*.mobileprovision
