@@ -1,0 +1,76 @@
+# Vox swiftlint config — see CLAUDE.md §Coding Conventions
+included:
+  - Vox
+  - VoxTests
+
+excluded:
+  - .build
+  - DerivedData
+  - build
+  - .dev-models
+
+opt_in_rules:
+  - empty_count
+  - empty_string
+  - explicit_init
+  - first_where
+  - force_unwrapping
+  - implicit_return
+  - last_where
+  - prefer_self_in_static_references
+  - redundant_nil_coalescing
+  - sorted_imports
+  - toggle_bool
+
+disabled_rules:
+  - todo                 # We use TODO comments deliberately
+  - trailing_comma       # Conflicts with swiftformat
+
+line_length:
+  warning: 120
+  error: 160
+  ignores_urls: true
+  ignores_comments: true
+
+identifier_name:
+  min_length: 2
+  excluded:
+    - id
+    - to
+    - x
+    - y
+
+type_name:
+  min_length: 3
+
+force_unwrapping:
+  severity: error
+
+# Tighten function and type complexity for the inference pipeline
+function_body_length:
+  warning: 60
+  error: 100
+
+type_body_length:
+  warning: 300
+  error: 500
+
+cyclomatic_complexity:
+  warning: 12
+  error: 20
+
+custom_rules:
+  no_print_in_release:
+    name: "No print() in non-test code"
+    regex: '\bprint\('
+    match_kinds:
+      - identifier
+    excluded:
+      - "VoxTests/.*"
+    message: "Use Logger from Vox/Logging/Logger+Categories.swift instead of print()."
+    severity: error
+  no_pii_in_logs:
+    name: "No PII interpolated into logs"
+    regex: '(Logger\.|logger\.|os_log).*\\\((transcript|rawText|cleaned|audio|pcm|prompt|selection|apiKey|token)'
+    message: "Never log audio, transcripts, prompts, or secrets above .debug. See vox-privacy-audit."
+    severity: error

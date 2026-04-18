@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  privacy-audit:
+    name: Privacy audit (no-network gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - name: Run vox-privacy-audit
+        run: bash .claude/skills/vox-privacy-audit/scripts/audit.sh
+
+  prompt-eval-fixtures-valid:
+    name: Prompt-eval fixtures valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate every cleanup_goldens fixture has the 3 required files
+        run: |
+          set -euo pipefail
+          fail=0
+          for d in VoxTests/Fixtures/cleanup_goldens/*/; do
+              [[ -d "$d" ]] || continue
+              for f in input.txt context.json reference.txt; do
+                  if [[ ! -f "$d$f" ]]; then
+                      echo "MISSING: $d$f"; fail=1
+                  fi
+              done
+              # context.json must be valid JSON
+              python3 -c "import json,sys; json.load(open('$d/context.json'))" || { echo "BAD JSON: $d/context.json"; fail=1; }
+          done
+          exit $fail
+
+  build-and-test:
+    name: Build + test (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          brew install xcodegen swiftformat swiftlint
+
+      - name: Generate Xcode project
+        run: make generate
+
+      - name: SwiftLint
+        run: swiftlint --strict --reporter github-actions-logging
+
+      - name: Build (macOS)
+        run: make build-mac
+
+      - name: Build (iOS Simulator)
+        run: make build-ios
+
+      - name: Test (macOS)
+        run: make test

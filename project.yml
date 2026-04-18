@@ -1,0 +1,112 @@
+name: Vox
+options:
+  bundleIdPrefix: llc.meridian
+  developmentLanguage: en
+  deploymentTarget:
+    iOS: "18.0"
+    macOS: "15.0"
+  groupSortPosition: top
+  generateEmptyDirectories: true
+  xcodeVersion: "16.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_UPCOMING_FEATURE_EXISTENTIAL_ANY: YES
+    DEAD_CODE_STRIPPING: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""    # <-- fill in your Apple Developer team ID
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    GENERATE_INFOPLIST_FILE: NO
+    PRODUCT_NAME: Vox
+
+packages:
+  whispercpp:
+    url: https://github.com/ggerganov/whisper.cpp
+    branch: master
+  llamacpp:
+    url: https://github.com/ggerganov/llama.cpp
+    branch: master
+
+targets:
+
+  # ── macOS app ───────────────────────────────────────────────────────────────
+  Vox:
+    type: application
+    platform: macOS
+    sources:
+      - path: Vox
+        excludes:
+          - "**/*+iOS.swift"
+    resources:
+      - path: Vox/Resources/Models/registry.json
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: llc.meridian.vox
+        INFOPLIST_FILE: Vox/Resources/Info-macOS.plist
+        CODE_SIGN_ENTITLEMENTS: Vox/Resources/Vox-macOS.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/../Frameworks"
+    dependencies:
+      - package: whispercpp
+        product: whisper
+      - package: llamacpp
+        product: llama
+
+  # ── iOS app ─────────────────────────────────────────────────────────────────
+  VoxIOS:
+    type: application
+    platform: iOS
+    productName: Vox
+    sources:
+      - path: Vox
+        excludes:
+          - "**/*+macOS.swift"
+    resources:
+      - path: Vox/Resources/Models/registry.json
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: llc.meridian.vox
+        INFOPLIST_FILE: Vox/Resources/Info-iOS.plist
+        CODE_SIGN_ENTITLEMENTS: Vox/Resources/Vox-iOS.entitlements
+        TARGETED_DEVICE_FAMILY: "1,2"
+    dependencies:
+      - package: whispercpp
+        product: whisper
+      - package: llamacpp
+        product: llama
+
+  # ── Tests (macOS, fastest iteration) ────────────────────────────────────────
+  VoxTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: VoxTests
+        excludes:
+          - "Fixtures/**"
+      - path: VoxTests/Fixtures
+        type: folder
+    dependencies:
+      - target: Vox
+    settings:
+      base:
+        BUNDLE_LOADER: $(TEST_HOST)
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Vox.app/Contents/MacOS/Vox
+
+schemes:
+  Vox:
+    build:
+      targets:
+        Vox: all
+        VoxTests: [test]
+    test:
+      targets:
+        - VoxTests
+      gatherCoverageData: true
+  VoxIOS:
+    build:
+      targets:
+        VoxIOS: all
