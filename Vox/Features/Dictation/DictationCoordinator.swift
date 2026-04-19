@@ -49,7 +49,7 @@ final class DictationCoordinator: ObservableObject {
     // MARK: - Dictation
 
     func startDictation() async {
-        guard state == .idle || state == .result("") || state.isFinished else { return }
+        guard state == .idle || state.isFinished else { return }
 
         do {
             try await audioCapture.startRecording()

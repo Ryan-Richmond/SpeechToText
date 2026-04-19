@@ -1,6 +1,12 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import OSLog
 
+/// Captures microphone audio and resamples it to 16 kHz mono Float32 for Whisper.
+///
+/// `@preconcurrency import AVFoundation` is used because several AVFoundation
+/// types (`AVAudioEngine`, `AVAudioConverter`, `AVAudioPCMBuffer`) are not yet
+/// annotated as Sendable even though they are safe to pass across isolation
+/// boundaries in our usage pattern (single capture session, serialized access).
 actor AudioCapture {
 
     struct AudioBuffer: Sendable {
@@ -10,6 +16,7 @@ actor AudioCapture {
     }
 
     private var engine: AVAudioEngine?
+    private var converter: AVAudioConverter?
     private var accumulatedSamples: [Float] = []
     private let targetSampleRate: Double = 16_000
 
@@ -20,9 +27,11 @@ actor AudioCapture {
     func startRecording() async throws {
         guard !isRecording else { return }
 
+        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.record, mode: .measurement)
         try session.setActive(true)
+        #endif
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
@@ -31,11 +40,18 @@ actor AudioCapture {
         accumulatedSamples.removeAll()
 
         let converter = makeConverter(from: inputFormat)
+        self.converter = converter
+        let targetRate = targetSampleRate
 
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            guard let self else { return }
-            let converted = self.convertToMono16k(buffer: buffer, converter: converter)
-            Task { await self.appendSamples(converted) }
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
+            let converted = Self.convertToMono16k(
+                buffer: buffer,
+                converter: converter,
+                targetSampleRate: targetRate
+            )
+            Task { [converted] in
+                await self.appendSamples(converted)
+            }
         }
 
         try engine.start()
@@ -52,7 +68,12 @@ actor AudioCapture {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         self.engine = nil
+        self.converter = nil
         isRecording = false
+
+        #if os(iOS)
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
 
         let samples = trimSilence(from: accumulatedSamples)
         let duration = Double(samples.count) / targetSampleRate
@@ -78,7 +99,11 @@ actor AudioCapture {
         return AVAudioConverter(from: inputFormat, to: outputFormat)
     }
 
-    private nonisolated func convertToMono16k(buffer: AVAudioPCMBuffer, converter: AVAudioConverter?) -> [Float] {
+    private static func convertToMono16k(
+        buffer: AVAudioPCMBuffer,
+        converter: AVAudioConverter?,
+        targetSampleRate: Double
+    ) -> [Float] {
         guard let converter,
               let outputFormat = AVAudioFormat(
                   commonFormat: .pcmFormatFloat32,
@@ -91,7 +116,8 @@ actor AudioCapture {
 
         let ratio = targetSampleRate / buffer.format.sampleRate
         let outputFrameCount = AVAudioFrameCount(Double(buffer.frameLength) * ratio)
-        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: outputFrameCount) else {
+        guard outputFrameCount > 0,
+              let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: outputFrameCount) else {
             return extractMono(from: buffer)
         }
 
@@ -110,7 +136,7 @@ actor AudioCapture {
         return Array(UnsafeBufferPointer(start: channelData[0], count: Int(outputBuffer.frameLength)))
     }
 
-    private nonisolated func extractMono(from buffer: AVAudioPCMBuffer) -> [Float] {
+    private static func extractMono(from buffer: AVAudioPCMBuffer) -> [Float] {
         guard let channelData = buffer.floatChannelData else { return [] }
         return Array(UnsafeBufferPointer(start: channelData[0], count: Int(buffer.frameLength)))
     }
