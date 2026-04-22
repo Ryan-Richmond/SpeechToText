@@ -8,16 +8,19 @@ let package = Package(
         .iOS(.v18)
     ],
     products: [
-        .library(name: "VoxCore", targets: ["VoxCore"]),
-        .executable(name: "VoxCLI", targets: ["VoxCLI"])
+        .library(name: "VoxCore", targets: ["VoxCore"])
+    ],
+    dependencies: [
+        .package(path: "Packages/whisper"),
+        .package(url: "https://github.com/mattt/llama.swift", branch: "main")
     ],
     targets: [
         .target(
-            name: "VoxCore"
-        ),
-        .executableTarget(
-            name: "VoxCLI",
-            dependencies: ["VoxCore"]
+            name: "VoxCore",
+            dependencies: [
+                .product(name: "whisper", package: "whisper"),
+                .product(name: "LlamaSwift", package: "llama.swift")
+            ]
         ),
         .testTarget(
             name: "VoxCoreTests",
