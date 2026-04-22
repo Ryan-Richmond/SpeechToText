@@ -1,20 +1,37 @@
 import Foundation
 
-struct Transcript: Sendable {
-    let text: String
-    let segments: [Segment]
-    let language: String
-    let durationMs: Int
-}
+// MARK: - STTEngine Protocol
 
-struct Segment: Sendable {
-    let text: String
-    let startMs: Int
-    let endMs: Int
-}
+/// Speech-to-text engine abstraction.
+/// Phase 1 implementation: WhisperCppEngine.
+/// Phase 2: CoreMLWhisperEngine.
+public protocol STTEngine: Sendable {
+    /// Load the model from disk. Must be called before transcribe().
+    func load(model: ModelConfig) async throws
 
-protocol STTEngine: Sendable {
-    func load(modelPath: URL) async throws
-    func transcribe(samples: [Float], sampleRate: Double, hints: [String]) async throws -> Transcript
+    /// Transcribe a PCM audio buffer into a Transcript.
+    /// - Parameters:
+    ///   - audio: The captured audio.
+    ///   - hints: Optional vocabulary hints (user dictionary terms).
+    func transcribe(audio: AudioBuffer, hints: [String]) async throws -> Transcript
+
+    /// Unload the model from memory.
     func unload() async
+}
+
+// MARK: - Transcript
+
+/// The output of a successful transcription.
+public struct Transcript: Sendable {
+    public let text: String
+    public let language: String
+    public let durationMs: Int
+    public let confidence: Float     // 0.0 – 1.0, estimated from avg log-prob
+
+    public init(text: String, language: String = "en", durationMs: Int, confidence: Float = 1.0) {
+        self.text = text
+        self.language = language
+        self.durationMs = durationMs
+        self.confidence = confidence
+    }
 }

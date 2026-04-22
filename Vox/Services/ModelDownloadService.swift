@@ -1,199 +1,193 @@
 import Foundation
-import OSLog
+import CryptoKit
+import os
 
-actor ModelDownloadService {
+// MARK: - ModelDownloadService
 
-    enum State: Sendable {
-        case idle
-        case downloading(progress: Double)
-        case verifying
-        case ready
-        case failed(Error)
+/// Manages resumable model file downloads with SHA-256 verification.
+/// All model files are stored in ModelConfig.modelsDirectory.
+public actor ModelDownloadService {
+
+    public static let shared = ModelDownloadService()
+    private init() {}
+
+    private let logger = Logger.vox(.download)
+
+    // MARK: - Progress
+
+    public struct DownloadProgress: Sendable {
+        public let modelName: String
+        public let bytesReceived: Int64
+        public let totalBytes: Int64
+        public var fractionCompleted: Double {
+            guard totalBytes > 0 else { return 0 }
+            return Double(bytesReceived) / Double(totalBytes)
+        }
+        public var isComplete: Bool { bytesReceived >= totalBytes && totalBytes > 0 }
     }
 
-    private let fileManager = FileManager.default
+    // MARK: - Error
 
-    // MARK: - Public
+    public enum DownloadError: Error, LocalizedError {
+        case insufficientDiskSpace(needed: Int64, available: Int64)
+        case downloadFailed(underlying: Error)
+        case sha256Mismatch(expected: String, actual: String)
+        case invalidURL(String)
 
-    func download(entry: ModelRegistryEntry, to directory: URL) async throws -> URL {
-        let destination = directory.appendingPathComponent(entry.filename)
-
-        if fileManager.fileExists(atPath: destination.path) {
-            Log.download.info("Model already exists: \(entry.filename)")
-            return destination
+        public var errorDescription: String? {
+            switch self {
+            case .insufficientDiskSpace(let needed, let available):
+                let fmt = ByteCountFormatter()
+                return "Not enough disk space. Need \(fmt.string(fromByteCount: needed)), have \(fmt.string(fromByteCount: available))."
+            case .downloadFailed(let e):
+                return "Download failed: \(e.localizedDescription)"
+            case .sha256Mismatch:
+                return "Model file is corrupted. Please try downloading again."
+            case .invalidURL(let s):
+                return "Invalid download URL: \(s)"
+            }
         }
+    }
 
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+    // MARK: - Public API
 
-        let partial = destination.appendingPathExtension("partial")
-
-        Log.download.info("Downloading \(entry.filename) (\(entry.sizeBytes) bytes)")
-
-        guard let remoteURL = URL(string: entry.url) else {
-            throw DownloadError.invalidURL(entry.url)
-        }
-
-        var request = URLRequest(url: remoteURL)
-        request.httpMethod = "GET"
-
-        // Resume partial downloads.
-        if fileManager.fileExists(atPath: partial.path),
-           let attrs = try? fileManager.attributesOfItem(atPath: partial.path),
-           let existingSize = attrs[.size] as? Int64 {
-            request.setValue("bytes=\(existingSize)-", forHTTPHeaderField: "Range")
-            Log.download.info("Resuming from byte \(existingSize)")
-        }
-
-        let (asyncBytes, response) = try await URLSession.shared.bytes(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse,
-              (200...299).contains(httpResponse.statusCode) || httpResponse.statusCode == 206 else {
-            throw DownloadError.httpError((response as? HTTPURLResponse)?.statusCode ?? -1)
-        }
-
-        let totalBytes = httpResponse.expectedContentLength
-        let handle = try FileHandle(forWritingTo: partial.ensureFileExists())
-        handle.seekToEndOfFile()
-
-        var bytesWritten: Int64 = 0
-        let chunkSize = 1024 * 256
-        var buffer = Data()
-        buffer.reserveCapacity(chunkSize)
-
-        for try await byte in asyncBytes {
-            buffer.append(byte)
-            if buffer.count >= chunkSize {
-                handle.write(buffer)
-                bytesWritten += Int64(buffer.count)
-                buffer.removeAll(keepingCapacity: true)
-
-                if totalBytes > 0 {
-                    let progress = Double(bytesWritten) / Double(totalBytes)
-                    Log.download.debug("Download progress: \(Int(progress * 100))%")
+    /// Downloads a model file if not already present on disk.
+    /// Yields DownloadProgress updates through the returned AsyncStream.
+    /// - Returns: An AsyncStream of progress updates. The final update has isComplete == true.
+    public func download(
+        model: ModelConfig
+    ) -> AsyncThrowingStream<DownloadProgress, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    try await self._download(model: model, continuation: continuation)
+                } catch {
+                    continuation.finish(throwing: error)
                 }
             }
         }
-
-        if !buffer.isEmpty {
-            handle.write(buffer)
-        }
-
-        try handle.close()
-
-        // SHA-256 verification.
-        if entry.sha256 != "TBD" && !entry.sha256.isEmpty {
-            Log.download.info("Verifying SHA-256 for \(entry.filename)")
-            let actualHash = try sha256(of: partial)
-            if actualHash != entry.sha256.lowercased() {
-                try? fileManager.removeItem(at: partial)
-                throw DownloadError.checksumMismatch(expected: entry.sha256, actual: actualHash)
-            }
-        }
-
-        try fileManager.moveItem(at: partial, to: destination)
-        Log.download.info("Download complete: \(entry.filename)")
-        return destination
     }
 
-    func modelDirectory() throws -> URL {
-        #if os(iOS)
-        guard let container = fileManager.containerURL(forSecurityApplicationGroupIdentifier: "group.llc.meridian.vox") else {
-            throw DownloadError.noAppGroup
-        }
-        return container.appendingPathComponent("models", isDirectory: true)
-        #else
-        let appSupport = try fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        return appSupport
-            .appendingPathComponent("llc.meridian.vox", isDirectory: true)
-            .appendingPathComponent("models", isDirectory: true)
-        #endif
-    }
-
-    func isModelDownloaded(entry: ModelRegistryEntry) throws -> Bool {
-        let dir = try modelDirectory()
-        let path = dir.appendingPathComponent(entry.filename)
-        return fileManager.fileExists(atPath: path.path)
-    }
-
-    func modelPath(for entry: ModelRegistryEntry) throws -> URL {
-        let dir = try modelDirectory()
-        return dir.appendingPathComponent(entry.filename)
-    }
-
-    func diskSpaceAvailableGB() -> Double? {
-        guard let attrs = try? fileManager.attributesOfFileSystem(forPath: NSHomeDirectory()),
-              let freeBytes = attrs[.systemFreeSize] as? Int64 else {
-            return nil
-        }
-        return Double(freeBytes) / (1024 * 1024 * 1024)
+    /// Returns true if the model file is already on disk (any size > 0).
+    public func isDownloaded(_ model: ModelConfig) -> Bool {
+        model.isDownloaded
     }
 
     // MARK: - Private
 
-    private func sha256(of fileURL: URL) throws -> String {
-        let handle = try FileHandle(forReadingFrom: fileURL)
-        defer { try? handle.close() }
-        var hasher = SHA256Hasher()
-        while autoreleasepool(invoking: {
-            let chunk = handle.readData(ofLength: 1024 * 1024)
-            if chunk.isEmpty { return false }
-            hasher.update(chunk)
-            return true
-        }) {}
-        return hasher.finalize()
-    }
-}
+    private func _download(
+        model: ModelConfig,
+        continuation: AsyncThrowingStream<DownloadProgress, Error>.Continuation
+    ) async throws {
+        let destination = model.localURL
 
-// Minimal SHA-256 using CommonCrypto (available on Apple platforms).
-import CommonCrypto
+        // Create directory if needed
+        try FileManager.default.createDirectory(
+            at: ModelConfig.modelsDirectory,
+            withIntermediateDirectories: true
+        )
 
-private struct SHA256Hasher {
-    private var context = CC_SHA256_CTX()
-
-    init() {
-        CC_SHA256_Init(&context)
-    }
-
-    mutating func update(_ data: Data) {
-        data.withUnsafeBytes { buffer in
-            _ = CC_SHA256_Update(&context, buffer.baseAddress, CC_LONG(buffer.count))
+        // Already downloaded?
+        if model.isDownloaded {
+            logger.info("Model already on disk: \(model.localFilename)")
+            continuation.yield(DownloadProgress(
+                modelName: model.name,
+                bytesReceived: model.sizeBytes,
+                totalBytes: model.sizeBytes
+            ))
+            continuation.finish()
+            return
         }
+
+        // Disk space preflight
+        let volumeURL = ModelConfig.modelsDirectory
+        let attrs = try FileManager.default.attributesOfFileSystem(forPath: volumeURL.path)
+        let available = (attrs[.systemFreeSize] as? Int64) ?? 0
+        let needed = model.sizeBytes + 512_000_000 // 512MB headroom
+        guard available >= needed else {
+            throw DownloadError.insufficientDiskSpace(needed: needed, available: available)
+        }
+
+        guard let url = URL(string: model.remoteURL) else {
+            throw DownloadError.invalidURL(model.remoteURL)
+        }
+
+        logger.info("Downloading \(model.name) from \(model.remoteURL)")
+
+        // Use URLSession with delegate for progress
+        let session = URLSession(configuration: .default)
+        let (asyncBytes, response) = try await session.bytes(from: url)
+
+        if let httpResponse = response as? HTTPURLResponse,
+           !(200..<300).contains(httpResponse.statusCode) {
+            throw DownloadError.downloadFailed(underlying: URLError(.badServerResponse))
+        }
+
+        let totalBytes = (response as? HTTPURLResponse)
+            .flatMap { $0.value(forHTTPHeaderField: "Content-Length") }
+            .flatMap { Int64($0) } ?? model.sizeBytes
+
+        // Stream to temp file, then move
+        let tempURL = destination.appendingPathExtension("download")
+        FileManager.default.createFile(atPath: tempURL.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: tempURL)
+
+        var received: Int64 = 0
+        var chunk = Data()
+        chunk.reserveCapacity(65_536)
+
+        for try await byte in asyncBytes {
+            chunk.append(byte)
+            received += 1
+            if chunk.count >= 65_536 {
+                handle.write(chunk)
+                chunk.removeAll(keepingCapacity: true)
+                continuation.yield(DownloadProgress(
+                    modelName: model.name,
+                    bytesReceived: received,
+                    totalBytes: totalBytes
+                ))
+            }
+        }
+
+        // Flush remainder
+        if !chunk.isEmpty { handle.write(chunk) }
+        try handle.close()
+
+        // SHA-256 verification (skip if sha256 is empty — first download)
+        if !model.sha256.isEmpty {
+            let digest = try sha256(of: tempURL)
+            guard digest == model.sha256 else {
+                try? FileManager.default.removeItem(at: tempURL)
+                throw DownloadError.sha256Mismatch(expected: model.sha256, actual: digest)
+            }
+        }
+
+        // Atomic move to final location
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
+        }
+        try FileManager.default.moveItem(at: tempURL, to: destination)
+
+        logger.info("Download complete: \(model.localFilename)")
+
+        continuation.yield(DownloadProgress(
+            modelName: model.name,
+            bytesReceived: totalBytes,
+            totalBytes: totalBytes
+        ))
+        continuation.finish()
     }
 
-    mutating func finalize() -> String {
-        var digest = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        CC_SHA256_Final(&digest, &context)
+    private func sha256(of url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        var hasher = SHA256()
+        while true {
+            let chunk = try handle.read(upToCount: 65_536)
+            guard let chunk, !chunk.isEmpty else { break }
+            hasher.update(data: chunk)
+        }
+        let digest = hasher.finalize()
         return digest.map { String(format: "%02x", $0) }.joined()
-    }
-}
-
-private extension URL {
-    func ensureFileExists() throws -> URL {
-        if !FileManager.default.fileExists(atPath: path) {
-            FileManager.default.createFile(atPath: path, contents: nil)
-        }
-        return self
-    }
-}
-
-enum DownloadError: Error, LocalizedError {
-    case invalidURL(String)
-    case httpError(Int)
-    case checksumMismatch(expected: String, actual: String)
-    case noAppGroup
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidURL(let url): "Invalid download URL: \(url)"
-        case .httpError(let code): "Download failed with HTTP \(code)"
-        case .checksumMismatch(let expected, let actual):
-            "SHA-256 mismatch. Expected \(expected.prefix(12))..., got \(actual.prefix(12))..."
-        case .noAppGroup: "App Group container not configured."
-        }
     }
 }

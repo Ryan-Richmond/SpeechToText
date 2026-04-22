@@ -1,168 +1,217 @@
-@preconcurrency import AVFoundation
-import OSLog
+import Foundation
+import AVFoundation
+import os
 
-/// Captures microphone audio and resamples it to 16 kHz mono Float32 for Whisper.
+// MARK: - AudioCapture
+
+/// Captures microphone audio using AVAudioEngine and converts it to
+/// 16 kHz mono Float32 PCM suitable for Whisper.
 ///
-/// `@preconcurrency import AVFoundation` is used because several AVFoundation
-/// types (`AVAudioEngine`, `AVAudioConverter`, `AVAudioPCMBuffer`) are not yet
-/// annotated as Sendable even though they are safe to pass across isolation
-/// boundaries in our usage pattern (single capture session, serialized access).
-actor AudioCapture {
+/// Usage:
+///   let capture = AudioCapture()
+///   try await capture.startRecording()
+///   // … user speaks …
+///   let buffer = await capture.stopRecording()
+public actor AudioCapture {
 
-    struct AudioBuffer: Sendable {
-        let samples: [Float]
-        let sampleRate: Double
-        let durationSeconds: Double
+    // MARK: - Properties
+
+    private let logger = Logger.vox(.audio)
+
+    private let engine = AVAudioEngine()
+    private var isRecording = false
+    private var collectedSamples: [Float] = []
+
+    /// RMS level published for waveform animation (0.0 – 1.0).
+    /// Callers can poll this while recording.
+    public private(set) var rmsLevel: Float = 0
+
+    // MARK: - Target audio format: 16 kHz mono Float32
+
+    private static let targetSampleRate: Double = 16_000
+    private static let targetFormat = AVAudioFormat(
+        commonFormat: .pcmFormatFloat32,
+        sampleRate: targetSampleRate,
+        channels: 1,
+        interleaved: false
+    )!
+
+    // MARK: - Constants
+
+    /// RMS threshold below which audio is considered silence.
+    private static let silenceThreshold: Float = 0.01
+
+    final class TapData: @unchecked Sendable {
+        let buffer: AVAudioPCMBuffer
+        let converter: AVAudioConverter
+        let inputFormat: AVAudioFormat
+        init(buffer: AVAudioPCMBuffer, converter: AVAudioConverter, inputFormat: AVAudioFormat) {
+            self.buffer = buffer
+            self.converter = converter
+            self.inputFormat = inputFormat
+        }
     }
 
-    private var engine: AVAudioEngine?
-    private var converter: AVAudioConverter?
-    private var accumulatedSamples: [Float] = []
-    private let targetSampleRate: Double = 16_000
+    // MARK: - Public API
 
-    private var isRecording = false
-
-    // MARK: - Public
-
-    func startRecording() async throws {
+    /// Requests microphone permission and starts capturing audio.
+    /// Throws if permission is denied or the engine fails to start.
+    public func startRecording() async throws {
         guard !isRecording else { return }
 
-        #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.record, mode: .measurement)
-        try session.setActive(true)
-        #endif
+        try await requestMicrophonePermission()
 
-        let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
-        accumulatedSamples.removeAll()
-
-        let converter = makeConverter(from: inputFormat)
-        self.converter = converter
-        let targetRate = targetSampleRate
-
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
-            let converted = Self.convertToMono16k(
-                buffer: buffer,
-                converter: converter,
-                targetSampleRate: targetRate
-            )
-            Task { [converted] in
-                await self.appendSamples(converted)
-            }
+        guard let converter = AVAudioConverter(from: inputFormat, to: Self.targetFormat) else {
+            throw AudioCaptureError.formatConversionFailed
         }
 
+        collectedSamples = []
+        collectedSamples.reserveCapacity(160_000) // ~10s pre-alloc
+
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
+            guard let self else { return }
+            let data = TapData(buffer: buffer, converter: converter, inputFormat: inputFormat)
+            Task { await self.processTap(data: data) }
+        }
+
+        engine.prepare()
         try engine.start()
-        self.engine = engine
         isRecording = true
-        Log.audio.info("Recording started (input: \(Int(inputFormat.sampleRate)) Hz → 16 kHz mono)")
+        logger.info("AudioCapture: recording started")
     }
 
-    func stopRecording() async -> AudioBuffer {
-        guard isRecording, let engine else {
-            return AudioBuffer(samples: [], sampleRate: targetSampleRate, durationSeconds: 0)
-        }
+    /// Stops recording and returns the collected AudioBuffer.
+    /// Applies simple RMS-based VAD to trim leading/trailing silence.
+    public func stopRecording() async -> AudioBuffer {
+        guard isRecording else { return AudioBuffer(samples: []) }
+        isRecording = false
 
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        self.engine = nil
-        self.converter = nil
-        isRecording = false
 
-        #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        #endif
-
-        let samples = trimSilence(from: accumulatedSamples)
-        let duration = Double(samples.count) / targetSampleRate
-        Log.audio.info("Recording stopped: \(String(format: "%.1f", duration))s, \(samples.count) samples")
-
-        return AudioBuffer(samples: samples, sampleRate: targetSampleRate, durationSeconds: duration)
+        let trimmed = trimSilence(from: collectedSamples)
+        logger.info("AudioCapture: stopped. Duration: \(String(format: "%.1f", Double(trimmed.count) / 16_000))s, samples: \(trimmed.count)")
+        return AudioBuffer(samples: trimmed)
     }
 
-    // MARK: - Private
+    // MARK: - Private helpers
 
-    private func appendSamples(_ newSamples: [Float]) {
-        accumulatedSamples.append(contentsOf: newSamples)
-    }
+    private func processTap(data: TapData) async {
+        guard isRecording else { return }
+        let buffer = data.buffer
+        let converter = data.converter
+        let inputFormat = data.inputFormat
 
-    private func makeConverter(from inputFormat: AVAudioFormat) -> AVAudioConverter? {
-        guard let outputFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: targetSampleRate,
-            channels: 1,
-            interleaved: false
-        ) else { return nil }
-
-        return AVAudioConverter(from: inputFormat, to: outputFormat)
-    }
-
-    private static func convertToMono16k(
-        buffer: AVAudioPCMBuffer,
-        converter: AVAudioConverter?,
-        targetSampleRate: Double
-    ) -> [Float] {
-        guard let converter,
-              let outputFormat = AVAudioFormat(
-                  commonFormat: .pcmFormatFloat32,
-                  sampleRate: targetSampleRate,
-                  channels: 1,
-                  interleaved: false
-              ) else {
-            return extractMono(from: buffer)
+        // Convert to 16kHz mono
+        let frameCapacity = AVAudioFrameCount(
+            Double(buffer.frameLength) * Self.targetSampleRate / inputFormat.sampleRate
+        )
+        guard frameCapacity > 0,
+              let outputBuffer = AVAudioPCMBuffer(pcmFormat: Self.targetFormat, frameCapacity: frameCapacity) else {
+            return
         }
 
-        let ratio = targetSampleRate / buffer.format.sampleRate
-        let outputFrameCount = AVAudioFrameCount(Double(buffer.frameLength) * ratio)
-        guard outputFrameCount > 0,
-              let outputBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: outputFrameCount) else {
-            return extractMono(from: buffer)
+        final class UnsafeBufferWrapper: @unchecked Sendable {
+            let buffer: AVAudioPCMBuffer
+            init(_ buffer: AVAudioPCMBuffer) { self.buffer = buffer }
         }
+        let wrapper = UnsafeBufferWrapper(buffer)
 
         var error: NSError?
-        converter.convert(to: outputBuffer, error: &error) { _, outStatus in
+        let inputBlock: AVAudioConverterInputBlock = { _, outStatus in
             outStatus.pointee = .haveData
-            return buffer
+            return wrapper.buffer
         }
 
-        if let error {
-            Log.audio.error("Audio conversion failed: \(error.localizedDescription)")
-            return extractMono(from: buffer)
-        }
+        converter.convert(to: outputBuffer, error: &error, withInputFrom: inputBlock)
 
-        guard let channelData = outputBuffer.floatChannelData else { return [] }
-        return Array(UnsafeBufferPointer(start: channelData[0], count: Int(outputBuffer.frameLength)))
+        guard error == nil,
+              let channelData = outputBuffer.floatChannelData?[0] else { return }
+
+        let count = Int(outputBuffer.frameLength)
+        let newSamples = Array(UnsafeBufferPointer(start: channelData, count: count))
+
+        // Update RMS level for waveform display
+        let rms = sqrt(newSamples.reduce(0) { $0 + $1 * $1 } / Float(max(count, 1)))
+        rmsLevel = rms
+
+        collectedSamples.append(contentsOf: newSamples)
     }
 
-    private static func extractMono(from buffer: AVAudioPCMBuffer) -> [Float] {
-        guard let channelData = buffer.floatChannelData else { return [] }
-        return Array(UnsafeBufferPointer(start: channelData[0], count: Int(buffer.frameLength)))
-    }
+    private func trimSilence(from samples: [Float]) -> [Float] {
+        guard !samples.isEmpty else { return [] }
 
-    /// Simple VAD: strip leading/trailing silence below an RMS threshold.
-    private func trimSilence(from samples: [Float], windowSize: Int = 1600, threshold: Float = 0.01) -> [Float] {
-        guard samples.count > windowSize else { return samples }
+        let windowSize = 1_600 // 100ms windows at 16kHz
 
-        func rms(_ slice: ArraySlice<Float>) -> Float {
-            let sumSq = slice.reduce(Float(0)) { $0 + $1 * $1 }
-            return (sumSq / Float(slice.count)).squareRoot()
-        }
-
+        // Find first non-silent window
         var start = 0
-        while start + windowSize <= samples.count {
-            if rms(samples[start..<(start + windowSize)]) > threshold { break }
-            start += windowSize
+        for i in stride(from: 0, to: samples.count - windowSize, by: windowSize) {
+            let chunk = samples[i..<(i + windowSize)]
+            let rms = sqrt(chunk.reduce(0) { $0 + $1 * $1 } / Float(windowSize))
+            if rms > Self.silenceThreshold {
+                start = max(0, i - windowSize) // keep a tiny pre-roll
+                break
+            }
         }
 
+        // Find last non-silent window
         var end = samples.count
-        while end - windowSize >= start {
-            if rms(samples[(end - windowSize)..<end]) > threshold { break }
-            end -= windowSize
+        for i in stride(from: samples.count - windowSize, through: 0, by: -windowSize) {
+            let chunk = samples[i..<(i + windowSize)]
+            let rms = sqrt(chunk.reduce(0) { $0 + $1 * $1 } / Float(windowSize))
+            if rms > Self.silenceThreshold {
+                end = min(samples.count, i + windowSize * 2)
+                break
+            }
         }
 
         guard start < end else { return [] }
         return Array(samples[start..<end])
+    }
+
+    private func requestMicrophonePermission() async throws {
+        #if os(macOS)
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        switch status {
+        case .authorized: return
+        case .notDetermined:
+            let granted = await AVCaptureDevice.requestAccess(for: .audio)
+            if !granted { throw AudioCaptureError.microphonePermissionDenied }
+        default:
+            throw AudioCaptureError.microphonePermissionDenied
+        }
+        #else
+        let status = AVAudioApplication.shared.recordPermission
+        switch status {
+        case .granted: return
+        case .undetermined:
+            let granted = await AVAudioApplication.requestRecordPermission()
+            if !granted { throw AudioCaptureError.microphonePermissionDenied }
+        default:
+            throw AudioCaptureError.microphonePermissionDenied
+        }
+        #endif
+    }
+}
+
+// MARK: - AudioCaptureError
+
+public enum AudioCaptureError: Error, LocalizedError {
+    case microphonePermissionDenied
+    case formatConversionFailed
+    case engineStartFailed(Error)
+
+    public var errorDescription: String? {
+        switch self {
+        case .microphonePermissionDenied:
+            return "Vox needs microphone access to transcribe your speech. Please grant access in System Settings."
+        case .formatConversionFailed:
+            return "Could not configure audio format. Please restart the app."
+        case .engineStartFailed(let e):
+            return "Audio engine failed to start: \(e.localizedDescription)"
+        }
     }
 }

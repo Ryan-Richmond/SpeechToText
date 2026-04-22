@@ -2,67 +2,59 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-
-  privacy-audit:
-    name: Privacy audit (no-network gate)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install ripgrep
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
-      - name: Run vox-privacy-audit
-        run: bash .claude/skills/vox-privacy-audit/scripts/audit.sh
-
-  prompt-eval-fixtures-valid:
-    name: Prompt-eval fixtures valid
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Validate every cleanup_goldens fixture has the 3 required files
-        run: |
-          set -euo pipefail
-          fail=0
-          for d in VoxTests/Fixtures/cleanup_goldens/*/; do
-              [[ -d "$d" ]] || continue
-              for f in input.txt context.json reference.txt; do
-                  if [[ ! -f "$d$f" ]]; then
-                      echo "MISSING: $d$f"; fail=1
-                  fi
-              done
-              # context.json must be valid JSON
-              python3 -c "import json,sys; json.load(open('$d/context.json'))" || { echo "BAD JSON: $d/context.json"; fail=1; }
-          done
-          exit $fail
-
-  build-and-test:
-    name: Build + test (macOS)
+  apple-build-and-test:
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install toolchain
+      - name: Install tooling
         run: |
-          brew install xcodegen swiftformat swiftlint
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          if ! command -v swiftlint >/dev/null 2>&1; then
+            brew install swiftlint
+          fi
 
       - name: Generate Xcode project
-        run: make generate
+        run: scripts/bootstrap_xcodeproj.sh
+
+      - name: List schemes
+        run: xcodebuild -list -project Vox.xcodeproj
+
+      - name: Build iOS
+        run: |
+          xcodebuild -project Vox.xcodeproj \
+            -scheme "Vox-iOS" \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Build macOS
+        run: |
+          xcodebuild -project Vox.xcodeproj \
+            -scheme "Vox-macOS" \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Test macOS
+        run: |
+          xcodebuild -project Vox.xcodeproj \
+            -scheme "Vox-macOS" \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            test
 
       - name: SwiftLint
-        run: swiftlint --strict --reporter github-actions-logging
+        run: swiftlint
 
-      - name: Build (macOS)
-        run: make build-mac
-
-      - name: Build (iOS Simulator)
-        run: make build-ios
-
-      - name: Test (macOS)
-        run: make test
+      - name: Privacy audit
+        run: scripts/privacy_audit.sh

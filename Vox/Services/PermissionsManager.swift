@@ -1,81 +1,84 @@
+import Foundation
 import AVFoundation
-import OSLog
-
+import os
 #if os(macOS)
+import ApplicationServices
 import AppKit
-#elseif os(iOS)
-import UIKit
 #endif
 
+// MARK: - PermissionsManager
+
+/// Checks and requests all permissions Vox needs.
+/// All methods are safe to call from any context.
 @MainActor
-final class PermissionsManager: ObservableObject {
+public final class PermissionsManager: ObservableObject {
 
-    @Published private(set) var microphoneGranted = false
-    @Published private(set) var accessibilityGranted = false
+    public static let shared = PermissionsManager()
+    private init() {}
 
-    func checkAll() async {
-        microphoneGranted = await checkMicrophone()
+    private let logger = Logger.vox(.permissions)
+
+    // MARK: - Published state
+
+    @Published public var microphoneGranted: Bool = false
+    @Published public var accessibilityGranted: Bool = false
+
+    // MARK: - Check (non-prompting)
+
+    public func refreshStatus() {
+        microphoneGranted = checkMicrophoneStatus()
+        accessibilityGranted = checkAccessibilityStatus()
+    }
+
+    public func checkMicrophoneStatus() -> Bool {
         #if os(macOS)
-        accessibilityGranted = checkAccessibility()
+        return AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         #else
-        accessibilityGranted = true
+        return AVAudioApplication.shared.recordPermission == .granted
         #endif
     }
 
-    // MARK: - Microphone
-
-    func requestMicrophone() async -> Bool {
-        let status = AVCaptureDevice.authorizationStatus(for: .audio)
-        switch status {
-        case .authorized:
-            microphoneGranted = true
-            return true
-        case .notDetermined:
-            let granted = await AVCaptureDevice.requestAccess(for: .audio)
-            microphoneGranted = granted
-            return granted
-        default:
-            microphoneGranted = false
-            Log.permissions.warning("Microphone permission denied. Opening Settings.")
-            openSettings()
-            return false
-        }
+    public func checkAccessibilityStatus() -> Bool {
+        #if os(macOS)
+        return AXIsProcessTrusted()
+        #else
+        return true  // Not applicable on iOS
+        #endif
     }
 
-    // MARK: - Accessibility (macOS only)
+    // MARK: - Request
+
+    public func requestMicrophonePermission() async -> Bool {
+        #if os(macOS)
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        if status == .authorized { 
+            microphoneGranted = true
+            return true 
+        }
+        let granted = await AVCaptureDevice.requestAccess(for: .audio)
+        microphoneGranted = granted
+        logger.info("Microphone permission: \(granted ? "granted" : "denied")")
+        return granted
+        #else
+        let granted = await AVAudioApplication.requestRecordPermission()
+        microphoneGranted = granted
+        return granted
+        #endif
+    }
 
     #if os(macOS)
-    func checkAccessibility() -> Bool {
-        let trusted = AXIsProcessTrusted()
-        accessibilityGranted = trusted
-        if !trusted {
-            Log.permissions.warning("Accessibility permission not granted.")
-        }
-        return trusted
+    /// Opens System Settings → Privacy & Security → Accessibility.
+    /// The user must manually grant access; we cannot prompt programmatically.
+    public func openAccessibilitySettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
+        NSWorkspace.shared.open(url)
+        logger.info("Opened Accessibility settings")
     }
 
-    func promptAccessibility() {
-        let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
-        AXIsProcessTrustedWithOptions(options)
+    /// Opens System Settings → Privacy & Security → Microphone.
+    public func openMicrophoneSettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!
+        NSWorkspace.shared.open(url)
     }
     #endif
-
-    // MARK: - Private
-
-    private func checkMicrophone() async -> Bool {
-        let status = AVCaptureDevice.authorizationStatus(for: .audio)
-        return status == .authorized
-    }
-
-    private func openSettings() {
-        #if os(macOS)
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
-            NSWorkspace.shared.open(url)
-        }
-        #else
-        if let url = URL(string: UIApplication.openSettingsURLString) {
-            UIApplication.shared.open(url)
-        }
-        #endif
-    }
 }

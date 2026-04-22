@@ -1,112 +1,103 @@
 import Foundation
-import OSLog
 import whisper
+import os
 
-/// STTEngine implementation using whisper.cpp via its C API.
-///
-/// Runs on a dedicated actor to ensure model access is serialized.
-/// Metal acceleration is enabled by default on Apple Silicon.
-actor WhisperCppEngine: STTEngine {
+// MARK: - WhisperCppEngine
 
-    private var context: OpaquePointer?
+/// Whisper STT engine backed by whisper.cpp with Metal acceleration.
+/// Loads `.bin` models from the Vox models directory.
+public actor WhisperCppEngine: STTEngine {
 
-    func load(modelPath: URL) async throws {
-        unloadSync()
+    private let logger = Logger.vox(.stt)
+    nonisolated(unsafe) private var context: OpaquePointer?
+    private var loadedModelPath: String?
 
-        Log.stt.info("Loading Whisper model: \(modelPath.lastPathComponent)")
+    public init() {}
+
+    // MARK: - STTEngine
+
+    public func load(model: ModelConfig) async throws {
+        let path = model.localURL.path
+
+        // Already loaded?
+        if path == loadedModelPath, context != nil { return }
+
+        // Unload any existing model
+        await unload()
+
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw WhisperError.modelNotFound(path: path)
+        }
+
+        logger.info("Loading Whisper model: \(model.name)")
 
         var params = whisper_context_default_params()
-        params.use_gpu = true
+        params.use_gpu = true   // Metal on Apple Silicon
 
-        let ctx = modelPath.path.withCString { cPath in
-            whisper_init_from_file_with_params(cPath, params)
+        guard let ctx = whisper_init_from_file_with_params(path, params) else {
+            throw WhisperError.modelLoadFailed(path: path)
         }
 
-        guard let ctx else {
-            throw WhisperError.failedToLoad(modelPath.lastPathComponent)
-        }
-
-        context = ctx
-        Log.stt.info("Whisper model loaded successfully")
+        self.context = ctx
+        self.loadedModelPath = path
+        logger.info("Whisper model loaded: \(model.name)")
     }
 
-    func transcribe(
-        samples: [Float],
-        sampleRate: Double,
-        hints: [String]
-    ) async throws -> Transcript {
+    public func transcribe(audio: AudioBuffer, hints: [String]) async throws -> Transcript {
         guard let ctx = context else {
-            throw WhisperError.modelNotLoaded
+            throw WhisperError.notLoaded
+        }
+        guard audio.hasAudio else {
+            return Transcript(text: "", durationMs: 0, confidence: 0)
         }
 
-        guard !samples.isEmpty else {
-            return Transcript(text: "", segments: [], language: "en", durationMs: 0)
-        }
-
-        let startTime = CFAbsoluteTimeGetCurrent()
+        let startTime = Date()
 
         var params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
-        params.n_threads = Int32(min(ProcessInfo.processInfo.activeProcessorCount, 4))
-        params.language = "en".withCString { strdup($0) }
-        params.translate = false
-        params.no_timestamps = false
         params.print_progress = false
-        params.print_special = false
         params.print_realtime = false
         params.print_timestamps = false
-        params.single_segment = false
-        params.suppress_blank = true
-        params.suppress_nst = true
+        params.language = ("en" as NSString).utf8String
+        params.n_threads = Int32(min(ProcessInfo.processInfo.processorCount, 8))
 
-        // Inject hints (personal dictionary) via initial_prompt.
-        if !hints.isEmpty {
-            let hintString = hints.joined(separator: ", ")
-            params.initial_prompt = hintString.withCString { strdup($0) }
-        }
+        // Inject vocabulary hints via initial_prompt
+        let hintString = hints.isEmpty ? nil : hints.joined(separator: ", ")
+        let hintCString = hintString.map { ($0 as NSString).utf8String }
+        params.initial_prompt = hintCString ?? nil
 
-        let result = samples.withUnsafeBufferPointer { buffer in
-            whisper_full(ctx, params, buffer.baseAddress, Int32(buffer.count))
-        }
-
-        // Clean up strdup'd strings.
-        if let lang = params.language { free(UnsafeMutablePointer(mutating: lang)) }
-        if let prompt = params.initial_prompt { free(UnsafeMutablePointer(mutating: prompt)) }
-
+        let samples = audio.samples
+        let result = whisper_full(ctx, params, samples, Int32(samples.count))
         guard result == 0 else {
             throw WhisperError.transcriptionFailed(code: Int(result))
         }
 
-        let segmentCount = whisper_full_n_segments(ctx)
-        var segments: [Segment] = []
-        var fullText = ""
-
-        for i in 0..<segmentCount {
-            guard let cText = whisper_full_get_segment_text(ctx, i) else { continue }
-            let text = String(cString: cText)
-            let t0 = Int(whisper_full_get_segment_t0(ctx, i)) * 10
-            let t1 = Int(whisper_full_get_segment_t1(ctx, i)) * 10
-            segments.append(Segment(text: text.trimmingCharacters(in: .whitespaces), startMs: t0, endMs: t1))
-            fullText += text
+        // Collect segments
+        let nSegments = whisper_full_n_segments(ctx)
+        var text = ""
+        for i in 0..<nSegments {
+            if let segText = whisper_full_get_segment_text(ctx, i) {
+                text += String(cString: segText)
+            }
         }
 
-        let elapsedMs = Int((CFAbsoluteTimeGetCurrent() - startTime) * 1000)
-        let transcript = fullText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let durationMs = Int(Double(samples.count) / sampleRate * 1000)
+        let elapsed = Int(Date().timeIntervalSince(startTime) * 1_000)
+        let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        Log.stt.info("Transcribed \(durationMs)ms audio in \(elapsedMs)ms: \(transcript.prefix(80), privacy: .private)...")
+        logger.debug("Whisper transcribed \(String(format: "%.1f", audio.durationSeconds))s audio in \(elapsed)ms: \"\(cleanText.prefix(60))\"")
 
-        return Transcript(text: transcript, segments: segments, language: "en", durationMs: durationMs)
+        return Transcript(
+            text: cleanText,
+            durationMs: elapsed,
+            confidence: 1.0
+        )
     }
 
-    func unload() async {
-        unloadSync()
-    }
-
-    private func unloadSync() {
+    public func unload() async {
         if let ctx = context {
             whisper_free(ctx)
-            context = nil
-            Log.stt.info("Whisper model unloaded")
+            self.context = nil
+            self.loadedModelPath = nil
+            logger.info("Whisper model unloaded")
         }
     }
 
@@ -117,16 +108,24 @@ actor WhisperCppEngine: STTEngine {
     }
 }
 
-enum WhisperError: Error, LocalizedError {
-    case failedToLoad(String)
-    case modelNotLoaded
+// MARK: - WhisperError
+
+public enum WhisperError: Error, LocalizedError {
+    case modelNotFound(path: String)
+    case modelLoadFailed(path: String)
+    case notLoaded
     case transcriptionFailed(code: Int)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
-        case .failedToLoad(let name): "Failed to load Whisper model: \(name)"
-        case .modelNotLoaded: "No Whisper model is loaded. Call load() first."
-        case .transcriptionFailed(let code): "Whisper transcription failed with code \(code)"
+        case .modelNotFound(let path):
+            return "Whisper model not found at \(path). Please download it first."
+        case .modelLoadFailed(let path):
+            return "Failed to load Whisper model from \(path). The file may be corrupted."
+        case .notLoaded:
+            return "Whisper model is not loaded. Call load() first."
+        case .transcriptionFailed(let code):
+            return "Whisper transcription failed with code \(code)."
         }
     }
 }
