@@ -1,0 +1,16 @@
+// Explicit module map for the whisper Swift module.
+//
+// SPM generates an implicit module containing ALL headers in this
+// directory — including ggml.h, which defines gguf_init_params with
+// a 'ctx' field that conflicts with the newer definition in the
+// llama.swift xcframework. By providing an explicit map we override
+// the auto-generated one and list only whisper.h.
+//
+// Clang C/C++ translation units still resolve #include "ggml.h"
+// through the header search path (-I), so nothing breaks at compile
+// time. The conflict is purely a Clang module merge issue at the
+// Swift level.
+module whisper {
+    header "whisper.h"
+    export *
+}

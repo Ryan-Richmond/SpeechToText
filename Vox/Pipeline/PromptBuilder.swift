@@ -50,14 +50,14 @@ public struct PromptBuilder: Sendable {
         let url = Bundle.main.url(forResource: "cleanup.system", withExtension: "txt",
                                   subdirectory: "Prompts")
             ?? Bundle.main.url(forResource: "cleanup.system", withExtension: "txt")
-        return (url.flatMap { try? String(contentsOf: $0) }) ?? Self.fallbackCleanupPrompt
+        return (url.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? Self.fallbackCleanupPrompt
     }()
 
     private static let commandSystemPrompt: String = {
         let url = Bundle.main.url(forResource: "command.system", withExtension: "txt",
                                   subdirectory: "Prompts")
             ?? Bundle.main.url(forResource: "command.system", withExtension: "txt")
-        return (url.flatMap { try? String(contentsOf: $0) }) ?? Self.fallbackCommandPrompt
+        return (url.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? Self.fallbackCommandPrompt
     }()
 
     // MARK: - Public API
