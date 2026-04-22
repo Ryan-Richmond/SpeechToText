@@ -21,6 +21,7 @@ public actor AudioCapture {
     private let engine = AVAudioEngine()
     private var isRecording = false
     private var collectedSamples: [Float] = []
+    private var pendingAppendCount = 0
 
     /// RMS level published for waveform animation (0.0 – 1.0).
     /// Callers can poll this while recording.
@@ -87,10 +88,16 @@ public actor AudioCapture {
     /// Applies simple RMS-based VAD to trim leading/trailing silence.
     public func stopRecording() async -> AudioBuffer {
         guard isRecording else { return AudioBuffer(samples: []) }
-        isRecording = false
 
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+
+        // Wait for any processTap tasks that were enqueued before the tap was
+        // removed. isRecording stays true so those tasks still append their samples.
+        while pendingAppendCount > 0 {
+            await Task.yield()
+        }
+        isRecording = false
 
         let trimmed = trimSilence(from: collectedSamples)
         logger.info("AudioCapture: stopped. Duration: \(String(format: "%.1f", Double(trimmed.count) / 16_000))s, samples: \(trimmed.count)")
@@ -100,6 +107,8 @@ public actor AudioCapture {
     // MARK: - Private helpers
 
     private func processTap(data: TapData) async {
+        pendingAppendCount += 1
+        defer { pendingAppendCount -= 1 }
         guard isRecording else { return }
         let buffer = data.buffer
         let converter = data.converter

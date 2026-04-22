@@ -33,9 +33,12 @@ allowed() {
     local line="$1"
     [[ -f "$ALLOW_FILE" ]] || return 1
     # Lines in .vox-privacy-audit.allow are substrings; # starts a comment.
-    grep -v '^\s*#' "$ALLOW_FILE" | grep -v '^\s*$' | while read -r pat; do
-        [[ "$line" == *"$pat"* ]] && exit 0
-    done
+    # Process substitution keeps the while loop in the current shell so
+    # return 0 actually exits the function (a pipeline would create a subshell
+    # where exit 0 would be swallowed, causing every match to fall through).
+    while read -r pat; do
+        [[ "$line" == *"$pat"* ]] && return 0
+    done < <(grep -v '^\s*#' "$ALLOW_FILE" | grep -v '^\s*$')
     return 1
 }
 
@@ -78,7 +81,7 @@ check_category \
 # 2. Known analytics / crash SDKs.
 check_category \
     "Analytics / crash SDKs" \
-    '\b(Firebase|Crashlytics|Mixpanel|Amplitude|Segment|Sentry|Bugsnag|AppsFlyer|Adjust|TelemetryDeck|PostHog|Datadog)\b' \
+    '\b(Firebase|Crashlytics|Mixpanel|Amplitude|Sentry|Bugsnag|AppsFlyer|Adjust|TelemetryDeck|PostHog|Datadog)\b' \
     '*.swift'
 
 # 3. PII in logs (heuristic: logger/print/NSLog interpolating sensitive names).

@@ -114,25 +114,50 @@ public actor ModelDownloadService {
 
         logger.info("Downloading \(model.name) from \(model.remoteURL)")
 
+        // Stream to temp file, then move
+        let tempURL = destination.appendingPathExtension("download")
+
+        // Resume: if a partial temp file exists, request only the remaining bytes.
+        var resumeOffset: Int64 = 0
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: tempURL.path),
+           let size = attrs[.size] as? Int64, size > 0 {
+            resumeOffset = size
+        }
+
+        var request = URLRequest(url: url)
+        if resumeOffset > 0 {
+            request.setValue("bytes=\(resumeOffset)-", forHTTPHeaderField: "Range")
+        }
+
         // Use URLSession with delegate for progress
         let session = URLSession(configuration: .default)
-        let (asyncBytes, response) = try await session.bytes(from: url)
+        let (asyncBytes, response) = try await session.bytes(for: request)
 
-        if let httpResponse = response as? HTTPURLResponse,
-           !(200..<300).contains(httpResponse.statusCode) {
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 200
+        if resumeOffset > 0 && statusCode == 200 {
+            // Server ignored our Range header and returned the full file.
+            // Appending its bytes to the partial would corrupt the file, so
+            // discard the partial and treat this as a fresh download.
+            try? FileManager.default.removeItem(at: tempURL)
+            resumeOffset = 0
+            logger.info("Server returned 200 for a Range request; restarting \(model.name) from scratch")
+        } else if !(200..<300).contains(statusCode) {
             throw DownloadError.downloadFailed(underlying: URLError(.badServerResponse))
         }
 
         let totalBytes = (response as? HTTPURLResponse)
             .flatMap { $0.value(forHTTPHeaderField: "Content-Length") }
-            .flatMap { Int64($0) } ?? model.sizeBytes
+            .flatMap { Int64($0) }.map { resumeOffset > 0 ? resumeOffset + $0 : $0 } ?? model.sizeBytes
 
-        // Stream to temp file, then move
-        let tempURL = destination.appendingPathExtension("download")
-        FileManager.default.createFile(atPath: tempURL.path, contents: nil)
+        if resumeOffset == 0 {
+            FileManager.default.createFile(atPath: tempURL.path, contents: nil)
+        }
         let handle = try FileHandle(forWritingTo: tempURL)
+        if resumeOffset > 0 {
+            try handle.seekToEnd()
+        }
 
-        var received: Int64 = 0
+        var received: Int64 = resumeOffset
         var chunk = Data()
         chunk.reserveCapacity(65_536)
 
