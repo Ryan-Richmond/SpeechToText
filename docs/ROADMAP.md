@@ -187,7 +187,7 @@ Every phase release runs this list:
 
 | Risk | Mitigation |
 |------|------------|
-| Gemma 4 release slips | Fall back to Gemma 3n for Phase 1; architecture is model-agnostic. |
+| Gemma 4 GGUF revision churn (post-launch) | Pin SHA-256 in `Vox/Resources/Models/registry.json`; bump deliberately. Architecture stays model-agnostic. |
 | llama.cpp performance regression on Apple Silicon | Pin to known-good commits; vendor if necessary. |
 | Apple rejects keyboard extension | Ship without keyboard extension (MVP already does). Wispr Flow precedent reduces risk. |
 | iOS 18 memory limit changes | `DeviceCapabilityService` downgrades tier automatically. |
