@@ -73,8 +73,8 @@ public actor LlamaCppEngine: LLMEngine {
             throw LlamaError.tokenizationFailed
         }
 
-        // Evaluate prompt tokens
-        var batch = llama_batch_init(512, 0, 1)
+        // Evaluate prompt tokens — size batch to actual token count to avoid buffer overrun
+        var batch = llama_batch_init(nTokens, 0, 1)
         defer { llama_batch_free(batch) }
 
         for (i, token) in tokens[0..<Int(nTokens)].enumerated() {
@@ -125,12 +125,15 @@ public actor LlamaCppEngine: LLMEngine {
                 output += piece
 
                 // Stop sequence check
+                var hitStop = false
                 for stop in stops {
                     if output.hasSuffix(stop) {
                         output = String(output.dropLast(stop.count))
+                        hitStop = true
                         break
                     }
                 }
+                if hitStop { break }
             }
 
             // Next decode step

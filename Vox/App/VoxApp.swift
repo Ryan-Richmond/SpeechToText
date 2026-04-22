@@ -25,6 +25,7 @@ struct VoxApp: App {
                 .environment(dictationCoordinator)
         }
         .menuBarExtraStyle(.window)
+        .modelContainer(for: modelTypes)
         .commands {
             CommandGroup(after: .appSettings) {
                 Button("Settings…") {

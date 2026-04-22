@@ -117,6 +117,12 @@ public actor ModelDownloadService {
         // Use URLSession with delegate for progress
         let session = URLSession(configuration: .default)
         let (asyncBytes, response) = try await session.bytes(from: url)
+
+        if let httpResponse = response as? HTTPURLResponse,
+           !(200..<300).contains(httpResponse.statusCode) {
+            throw DownloadError.downloadFailed(underlying: URLError(.badServerResponse))
+        }
+
         let totalBytes = (response as? HTTPURLResponse)
             .flatMap { $0.value(forHTTPHeaderField: "Content-Length") }
             .flatMap { Int64($0) } ?? model.sizeBytes
