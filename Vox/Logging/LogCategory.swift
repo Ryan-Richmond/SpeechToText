@@ -5,6 +5,11 @@ internal enum LogCategory: String {
     case audio
     case pipeline
     case models
+    case stt
+    case llm
+    case download
+    case permissions
+    case ui
 }
 
 internal extension Logger {

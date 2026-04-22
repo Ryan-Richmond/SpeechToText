@@ -1,0 +1,22 @@
+{
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SpeechToText}",
+            "name": "Debug VoxCLI",
+            "program": "${workspaceFolder:SpeechToText}/.build/debug/VoxCLI",
+            "preLaunchTask": "swift: Build Debug VoxCLI"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SpeechToText}",
+            "name": "Release VoxCLI",
+            "program": "${workspaceFolder:SpeechToText}/.build/release/VoxCLI",
+            "preLaunchTask": "swift: Build Release VoxCLI"
+        }
+    ]
+}
