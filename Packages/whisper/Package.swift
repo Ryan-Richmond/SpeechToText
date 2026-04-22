@@ -67,7 +67,6 @@ let package = Package(
             ] + additionalSources,
             publicHeadersPath: "Sources/whisper/include",
             cSettings: [
-                .unsafeFlags(["-Wno-shorten-64-to-32"]),
                 .define("GGML_USE_ACCELERATE"),
                 .define("WHISPER_USE_COREML"),
                 .define("WHISPER_COREML_ALLOW_FALLBACK")
